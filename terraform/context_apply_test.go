@@ -6848,6 +6848,51 @@ func TestContext2Apply_outputMultiIndex(t *testing.T) {
 	}
 }
 
+func TestContext2Apply_outputSensitive(t *testing.T) {
+	// Output of a child module refers to a sensitive variable
+	m := testModule(t, "apply-output-sensitive")
+	p := testProvider("aws")
+	p.ApplyResourceChangeFn = testApplyFn
+	p.PlanResourceChangeFn = testDiffFn
+
+	state := states.NewState()
+
+	ctx := testContext2(t, &ContextOpts{
+		Config: m,
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("aws"): testProviderFuncFixed(p),
+		},
+		State: state,
+	})
+
+	if _, diags := ctx.Plan(); diags.HasErrors() {
+		t.Fatalf("plan errors: %s", diags.Err())
+	}
+
+	state, diags := ctx.Apply()
+	if diags.HasErrors() {
+		t.Fatalf("diags: %s", diags.Err())
+	}
+
+	checkStateString(t, state, `
+<no state>
+Outputs:
+
+sens = foo
+
+module.child:
+  aws_instance.foo:
+    ID = foo
+    provider = provider["registry.terraform.io/hashicorp/aws"]
+    foo = foo
+    type = aws_instance
+
+  Outputs:
+
+  out = foo
+    `)
+}
+
 func TestContext2Apply_taintX(t *testing.T) {
 	m := testModule(t, "apply-taint")
 	p := testProvider("aws")

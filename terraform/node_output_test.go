@@ -102,11 +102,12 @@ func TestNodeApplyableOutputExecute_sensitiveValueNotOutput(t *testing.T) {
 	})
 	ctx.EvaluateExprResult = val
 
-	err := node.Execute(ctx, walkApply)
-	if err == nil {
-		t.Fatal("expected execute error, but there was none")
+	diags := node.Execute(ctx, walkApply)
+	if diags == nil {
+		t.Fatal("expected execute warning, but there was none")
 	}
-	if got, want := err.Error(), "Output refers to sensitive values"; !strings.Contains(got, want) {
+
+	if got, want := diags.Error(), "Output refers to sensitive values"; !strings.Contains(got, want) {
 		t.Errorf("expected error to include %q, but was: %s", want, got)
 	}
 }

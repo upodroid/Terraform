@@ -281,9 +281,9 @@ func (n *NodeApplyableOutput) Execute(ctx EvalContext, op walkOperation) error {
 		_, hasSensitive := marks["sensitive"]
 		if !n.Config.Sensitive && hasSensitive {
 			diags = diags.Append(&hcl.Diagnostic{
-				Severity: hcl.DiagError,
+				Severity: hcl.DiagWarning,
 				Summary:  "Output refers to sensitive values",
-				Detail:   "Expressions used in outputs can only refer to sensitive values if the sensitive attribute is true.",
+				Detail:   `The expressions used in this output refers to values marked as sensitive by either input variables or by a provider. Set the "sensitive" attribute to true to obfuscate this value.`,
 				Subject:  n.Config.DeclRange.Ptr(),
 			})
 		}
@@ -309,7 +309,7 @@ func (n *NodeApplyableOutput) Execute(ctx EvalContext, op walkOperation) error {
 		n.setValue(state, changes, val)
 	}
 
-	return nil
+	return diags.ErrWithWarnings()
 }
 
 // dag.GraphNodeDotter impl.
