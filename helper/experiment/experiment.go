@@ -56,6 +56,9 @@ var (
 
 	// Concise plan diff output
 	X_concise_diff = newBasicID("concise_diff", "CONCISE_DIFF", true)
+
+	// Marking provider Sensitive attributes
+	X_provider_sensitive = newBasicID("provider_sensitive", "PROVIDER_SENSITIVE", false)
 )
 
 // Global variables this package uses because we are a package
@@ -77,6 +80,7 @@ func init() {
 	All = []ID{
 		X_shadow,
 		X_concise_diff,
+		X_provider_sensitive,
 		x_force,
 	}
 

@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/configs"
 	"github.com/hashicorp/terraform/configs/configschema"
+	"github.com/hashicorp/terraform/helper/experiment"
 	"github.com/hashicorp/terraform/instances"
 	"github.com/hashicorp/terraform/lang"
 	"github.com/hashicorp/terraform/plans"
@@ -753,7 +754,7 @@ func (d *evaluationStateData) GetResource(addr addrs.Resource, rng tfdiags.Sourc
 			}
 
 			// If our schema contains sensitive values, mark those as sensitive
-			if schema.ContainsSensitive() {
+			if experiment.Enabled(experiment.X_provider_sensitive) && schema.ContainsSensitive() {
 				val = markProviderSensitiveAttributes(schema, val)
 			}
 			instances[key] = val.MarkWithPaths(change.AfterValMarks)
@@ -775,7 +776,7 @@ func (d *evaluationStateData) GetResource(addr addrs.Resource, rng tfdiags.Sourc
 
 		val := ios.Value
 		// If our schema contains sensitive values, mark those as sensitive
-		if schema.ContainsSensitive() {
+		if experiment.Enabled(experiment.X_provider_sensitive) && schema.ContainsSensitive() {
 			val = markProviderSensitiveAttributes(schema, val)
 		}
 		instances[key] = val

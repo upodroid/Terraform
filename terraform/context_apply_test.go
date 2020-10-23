@@ -22,6 +22,7 @@ import (
 	"github.com/hashicorp/terraform/configs"
 	"github.com/hashicorp/terraform/configs/configschema"
 	"github.com/hashicorp/terraform/configs/hcl2shim"
+	"github.com/hashicorp/terraform/helper/experiment"
 	"github.com/hashicorp/terraform/plans"
 	"github.com/hashicorp/terraform/providers"
 	"github.com/hashicorp/terraform/provisioners"
@@ -11901,10 +11902,11 @@ output "out" {
 
 	addr := mustResourceInstanceAddr("test_resource.foo")
 	fooChangeSrc := plan.Changes.ResourceInstance(addr)
-	if len(fooChangeSrc.AfterValMarks) != 1 {
-		t.Fatalf("expected 1 sensitive path, got %d", len(fooChangeSrc.AfterValMarks))
+	verifySensitiveValue(t, fooChangeSrc.AfterValMarks)
+
+	if fooChangeSrc.Action != plans.Create {
+		t.Fatalf("unexpected action, espected Create, got %v", fooChangeSrc.Action)
 	}
-	// TODO Validate the paths here
 
 	state, diags := ctx.Apply()
 	if diags.HasErrors() {
@@ -11920,50 +11922,70 @@ output "out" {
 	// TODO validate the paths here
 
 	// Run a second apply with no changes
-	// ctx = testContext2(t, &ContextOpts{
-	// 	Config: m,
-	// 	Providers: map[addrs.Provider]providers.Factory{
-	// 		addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
-	// 	},
-	// 	State: state,
-	// })
+	ctx = testContext2(t, &ContextOpts{
+		Config: m,
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
+		},
+		State: state,
+	})
 
-	// plan, diags = ctx.Plan()
+	plan, diags = ctx.Plan()
 
-	// if diags.HasErrors() {
-	// 	t.Fatalf("plan errors: %s", diags.Err())
-	// }
+	if diags.HasErrors() {
+		t.Fatalf("plan errors: %s", diags.Err())
+	}
 
-	// state, diags = ctx.Apply()
-	// if diags.HasErrors() {
-	// 	t.Fatalf("apply errors: %s", diags.Err())
-	// }
+	fooChangeSrc = plan.Changes.ResourceInstance(addr)
+	verifySensitiveValue(t, fooChangeSrc.AfterValMarks)
+
+	if fooChangeSrc.Action != plans.NoOp {
+		t.Fatalf("unexpected action, espected NoOp, got %v", fooChangeSrc.Action)
+	}
+
+	state, diags = ctx.Apply()
+	if diags.HasErrors() {
+		t.Fatalf("apply errors: %s", diags.Err())
+	}
 
 	// Now change the variable value for sensitive_var
-	// ctx = testContext2(t, &ContextOpts{
-	// 	Config: m,
-	// 	Providers: map[addrs.Provider]providers.Factory{
-	// 		addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
-	// 	},
-	// 	Variables: InputValues{
-	// 		"in": &InputValue{
-	// 			Value: cty.StringVal("bar"),
-	// 		},
-	// 	},
-	// 	State: state,
-	// })
+	ctx = testContext2(t, &ContextOpts{
+		Config: m,
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
+		},
+		Variables: InputValues{
+			"in": &InputValue{
+				Value: cty.StringVal("bar"),
+			},
+		},
+		State: state,
+	})
 
-	// if _, diags := ctx.Plan(); diags.HasErrors() {
-	// 	t.Fatalf("plan errors: %s", diags.Err())
-	// }
+	plan, diags = ctx.Plan()
 
-	// _, diags = ctx.Apply()
-	// if diags.HasErrors() {
-	// 	t.Fatalf("apply errors: %s", diags.Err())
-	// }
+	if diags.HasErrors() {
+		t.Fatalf("plan errors: %s", diags.Err())
+	}
+
+	fooChangeSrc = plan.Changes.ResourceInstance(addr)
+	verifySensitiveValue(t, fooChangeSrc.AfterValMarks)
+
+	if fooChangeSrc.Action != plans.Update {
+		t.Fatalf("unexpected action, espected Update, got %v", fooChangeSrc.Action)
+	}
+
+	state, diags = ctx.Apply()
+	if diags.HasErrors() {
+		t.Fatalf("apply errors: %s", diags.Err())
+	}
+
 }
 
 func TestContext2Apply_variableSensitivityPropagation(t *testing.T) {
+	experiment.SetEnabled(experiment.X_provider_sensitive, true)
+	defer experiment.SetEnabled(experiment.X_provider_sensitive, false)
+
 	m := testModuleInline(t, map[string]string{
 		"main.tf": `
 variable "sensitive_map" {
@@ -12011,33 +12033,20 @@ resource "test_resource" "baz" {
 		t.Fatalf("plan errors: %s", diags.Err())
 	}
 
-	verifySensitiveValue := func(pvms []cty.PathValueMarks) {
-		if len(pvms) != 1 {
-			t.Fatalf("expected 1 sensitive path, got %d", len(pvms))
-		}
-		pvm := pvms[0]
-		if gotPath, wantPath := pvm.Path, cty.GetAttrPath("value"); !gotPath.Equals(wantPath) {
-			t.Errorf("wrong path\n got: %#v\nwant: %#v", gotPath, wantPath)
-		}
-		if gotMarks, wantMarks := pvm.Marks, cty.NewValueMarks("sensitive"); !gotMarks.Equal(wantMarks) {
-			t.Errorf("wrong marks\n got: %#v\nwant: %#v", gotMarks, wantMarks)
-		}
-	}
-
 	addr := mustResourceInstanceAddr("test_resource.foo")
 	fooChangeSrc := plan.Changes.ResourceInstance(addr)
-	verifySensitiveValue(fooChangeSrc.AfterValMarks)
+	verifySensitiveValue(t, fooChangeSrc.AfterValMarks)
 
 	// Sensitive attributes (defined by the provider) are marked
 	// as sensitive when referenced from another resource
 	// "bar" references sensitive resources in "foo"
 	barAddr := mustResourceInstanceAddr("test_resource.bar")
 	barChangeSrc := plan.Changes.ResourceInstance(barAddr)
-	verifySensitiveValue(barChangeSrc.AfterValMarks)
+	verifySensitiveValue(t, barChangeSrc.AfterValMarks)
 
 	bazAddr := mustResourceInstanceAddr("test_resource.baz")
 	bazChangeSrc := plan.Changes.ResourceInstance(bazAddr)
-	verifySensitiveValue(bazChangeSrc.AfterValMarks)
+	verifySensitiveValue(t, bazChangeSrc.AfterValMarks)
 
 	state, diags := ctx.Apply()
 	if diags.HasErrors() {
@@ -12045,13 +12054,13 @@ resource "test_resource" "baz" {
 	}
 
 	fooState := state.ResourceInstance(addr)
-	verifySensitiveValue(fooState.Current.AttrSensitivePaths)
+	verifySensitiveValue(t, fooState.Current.AttrSensitivePaths)
 
 	barState := state.ResourceInstance(barAddr)
-	verifySensitiveValue(barState.Current.AttrSensitivePaths)
+	verifySensitiveValue(t, barState.Current.AttrSensitivePaths)
 
 	bazState := state.ResourceInstance(bazAddr)
-	verifySensitiveValue(bazState.Current.AttrSensitivePaths)
+	verifySensitiveValue(t, bazState.Current.AttrSensitivePaths)
 }
 
 func TestContext2Apply_variableSensitivityChange(t *testing.T) {
@@ -12308,5 +12317,18 @@ resource "test_resource" "foo" {
 	inst := state.ResourceInstance(mustResourceInstanceAddr("test_resource.foo"))
 	if inst == nil {
 		t.Fatal("missing 'test_resource.foo' in state:", state)
+	}
+}
+
+func verifySensitiveValue(t *testing.T, pvms []cty.PathValueMarks) {
+	if len(pvms) != 1 {
+		t.Fatalf("expected 1 sensitive path, got %d", len(pvms))
+	}
+	pvm := pvms[0]
+	if gotPath, wantPath := pvm.Path, cty.GetAttrPath("value"); !gotPath.Equals(wantPath) {
+		t.Errorf("wrong path\n got: %#v\nwant: %#v", gotPath, wantPath)
+	}
+	if gotMarks, wantMarks := pvm.Marks, cty.NewValueMarks("sensitive"); !gotMarks.Equal(wantMarks) {
+		t.Errorf("wrong marks\n got: %#v\nwant: %#v", gotMarks, wantMarks)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform/addrs"
 	"github.com/hashicorp/terraform/configs"
 	"github.com/hashicorp/terraform/configs/configschema"
+	"github.com/hashicorp/terraform/helper/experiment"
 	"github.com/hashicorp/terraform/plans"
 	"github.com/hashicorp/terraform/states"
 	"github.com/hashicorp/terraform/tfdiags"
@@ -126,6 +127,9 @@ func TestEvaluatorGetInputVariable(t *testing.T) {
 }
 
 func TestEvaluatorGetResource(t *testing.T) {
+	experiment.SetEnabled(experiment.X_provider_sensitive, true)
+	defer experiment.SetEnabled(experiment.X_provider_sensitive, false)
+
 	stateSync := states.BuildState(func(ss *states.SyncState) {
 		ss.SetResourceInstanceCurrent(
 			addrs.Resource{
@@ -300,6 +304,9 @@ func TestEvaluatorGetResource(t *testing.T) {
 // GetResource will return a planned object's After value
 // if there is a change for that resource instance.
 func TestEvaluatorGetResource_changes(t *testing.T) {
+	experiment.SetEnabled(experiment.X_provider_sensitive, true)
+	defer experiment.SetEnabled(experiment.X_provider_sensitive, false)
+
 	// Set up existing state
 	stateSync := states.BuildState(func(ss *states.SyncState) {
 		ss.SetResourceInstanceCurrent(
