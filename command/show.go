@@ -242,6 +242,9 @@ func getStateFromPath(path string) (*statefile.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Error reading %s as a statefile: %s", path, err)
 	}
+	if err := stateFile.CheckVersion(); err != nil {
+		return nil, fmt.Errorf("Error reading %s as a statefile: %s", path, err)
+	}
 	return stateFile, nil
 }
 
