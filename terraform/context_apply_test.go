@@ -11856,6 +11856,113 @@ resource "test_resource" "foo" {
 	}
 }
 
+func TestContext2Apply_variableSensitivityModules(t *testing.T) {
+	m := testModuleInline(t, map[string]string{
+		"main.tf": `
+variable "in" {
+    default = "foo"
+}
+
+module "mod1" {
+    source = "./mod1"
+    sensitive_var = var.in
+}
+
+resource "test_resource" "foo" {
+	value   = module.mod1.out
+}`,
+		"mod1/main.tf": `
+variable "sensitive_var" {
+	sensitive = true
+}
+
+output "out" {
+    value = var.sensitive_var
+    sensitive = true
+}
+`,
+	})
+
+	p := testProvider("test")
+	p.ApplyResourceChangeFn = testApplyFn
+	p.PlanResourceChangeFn = testDiffFn
+
+	ctx := testContext2(t, &ContextOpts{
+		Config: m,
+		Providers: map[addrs.Provider]providers.Factory{
+			addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
+		},
+	})
+
+	plan, diags := ctx.Plan()
+	if diags.HasErrors() {
+		t.Fatalf("plan errors: %s", diags.Err())
+	}
+
+	addr := mustResourceInstanceAddr("test_resource.foo")
+	fooChangeSrc := plan.Changes.ResourceInstance(addr)
+	if len(fooChangeSrc.AfterValMarks) != 1 {
+		t.Fatalf("expected 1 sensitive path, got %d", len(fooChangeSrc.AfterValMarks))
+	}
+	// TODO Validate the paths here
+
+	state, diags := ctx.Apply()
+	if diags.HasErrors() {
+		t.Fatalf("apply errors: %s", diags.Err())
+	}
+
+	fooState := state.ResourceInstance(addr)
+	sensitivePaths := fooState.Current.AttrSensitivePaths
+
+	if len(sensitivePaths) != 1 {
+		t.Fatalf("expected 1 sensitive path, got %d", len(sensitivePaths))
+	}
+	// TODO validate the paths here
+
+	// Run a second apply with no changes
+	// ctx = testContext2(t, &ContextOpts{
+	// 	Config: m,
+	// 	Providers: map[addrs.Provider]providers.Factory{
+	// 		addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
+	// 	},
+	// 	State: state,
+	// })
+
+	// plan, diags = ctx.Plan()
+
+	// if diags.HasErrors() {
+	// 	t.Fatalf("plan errors: %s", diags.Err())
+	// }
+
+	// state, diags = ctx.Apply()
+	// if diags.HasErrors() {
+	// 	t.Fatalf("apply errors: %s", diags.Err())
+	// }
+
+	// Now change the variable value for sensitive_var
+	// ctx = testContext2(t, &ContextOpts{
+	// 	Config: m,
+	// 	Providers: map[addrs.Provider]providers.Factory{
+	// 		addrs.NewDefaultProvider("test"): testProviderFuncFixed(p),
+	// 	},
+	// 	Variables: InputValues{
+	// 		"in": &InputValue{
+	// 			Value: cty.StringVal("bar"),
+	// 		},
+	// 	},
+	// 	State: state,
+	// })
+
+	// if _, diags := ctx.Plan(); diags.HasErrors() {
+	// 	t.Fatalf("plan errors: %s", diags.Err())
+	// }
+
+	// _, diags = ctx.Apply()
+	// if diags.HasErrors() {
+	// 	t.Fatalf("apply errors: %s", diags.Err())
+	// }
+}
+
 func TestContext2Apply_variableSensitivityPropagation(t *testing.T) {
 	m := testModuleInline(t, map[string]string{
 		"main.tf": `
