@@ -113,3 +113,7 @@ func (b *Backend) StateMgr(name string) (statemgr.Full, error) {
 
 	return stateMgr, nil
 }
+
+func (b *Backend) StateMgrWithoutCheckVersion(name string) (statemgr.Full, error) {
+	return b.StateMgr(name)
+}
