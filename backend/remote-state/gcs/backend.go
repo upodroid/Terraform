@@ -4,8 +4,8 @@ package gcs
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 
@@ -14,7 +14,6 @@ import (
 	"github.com/hashicorp/terraform/httpclient"
 	"github.com/hashicorp/terraform/internal/legacy/helper/schema"
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/jwt"
 	"google.golang.org/api/option"
 )
 
@@ -51,10 +50,11 @@ func New() backend.Backend {
 			},
 
 			"credentials": {
-				Type:        schema.TypeString,
-				Optional:    true,
-				Description: "Google Cloud JSON Account Key",
-				Default:     "",
+				Type:          schema.TypeString,
+				Optional:      true,
+				Description:   "Google Cloud JSON Account Key",
+				Default:       "",
+				ConflictsWith: []string{"access_token"},
 			},
 
 			"access_token": {
@@ -63,7 +63,8 @@ func New() backend.Backend {
 				DefaultFunc: schema.MultiEnvDefaultFunc([]string{
 					"GOOGLE_OAUTH_ACCESS_TOKEN",
 				}, nil),
-				Description: "An OAuth2 token used for GCP authentication",
+				Description:   "An OAuth2 token used for GCP authentication",
+				ConflictsWith: []string{"credentials"},
 			},
 
 			"impersonate_service_account": {
@@ -133,13 +134,26 @@ func (b *Backend) configure(ctx context.Context) error {
 
 	// Add credential source
 	var creds string
-	var tokenSource oauth2.TokenSource
+	var ImpersonateServiceAccount string
+	var ImpersonateServiceAccountDelegates []string
 
-	if v, ok := data.GetOk("access_token"); ok {
-		tokenSource = oauth2.StaticTokenSource(&oauth2.Token{
-			AccessToken: v.(string),
-		})
-	} else if v, ok := data.GetOk("credentials"); ok {
+	if v, ok := data.GetOk("impersonate_service_account"); ok {
+		ImpersonateServiceAccount = v.(string)
+	}
+
+	if v, ok := data.GetOk("impersonate_service_account_delegates"); ok {
+		var delegates []string
+		d := v.([]interface{})
+		if len(delegates) > 0 {
+			delegates = make([]string, len(d))
+		}
+		for _, delegate := range d {
+			delegates = append(delegates, delegate.(string))
+		}
+		ImpersonateServiceAccountDelegates = delegates
+	}
+
+	if v, ok := data.GetOk("credentials"); ok {
 		creds = v.(string)
 	} else if v := os.Getenv("GOOGLE_BACKEND_CREDENTIALS"); v != "" {
 		creds = v
@@ -147,49 +161,38 @@ func (b *Backend) configure(ctx context.Context) error {
 		creds = os.Getenv("GOOGLE_CREDENTIALS")
 	}
 
-	if tokenSource != nil {
-		opts = append(opts, option.WithTokenSource(tokenSource))
-	} else if creds != "" {
-		var account accountFile
-
-		// to mirror how the provider works, we accept the file path or the contents
+	if creds != "" {
 		contents, err := backend.ReadPathOrContents(creds)
 		if err != nil {
-			return fmt.Errorf("Error loading credentials: %s", err)
+			return fmt.Errorf("error loading credentials: %s", err)
 		}
-
-		if err := json.Unmarshal([]byte(contents), &account); err != nil {
-			return fmt.Errorf("Error parsing credentials '%s': %s", contents, err)
+		if ImpersonateServiceAccount != "" {
+			opts = []option.ClientOption{option.WithCredentialsJSON([]byte(contents)), option.ImpersonateCredentials(ImpersonateServiceAccount, ImpersonateServiceAccountDelegates...)}
 		}
+		opts = []option.ClientOption{option.WithCredentialsJSON([]byte(contents))}
 
-		conf := jwt.Config{
-			Email:      account.ClientEmail,
-			PrivateKey: []byte(account.PrivateKey),
-			Scopes:     []string{storage.ScopeReadWrite},
-			TokenURL:   "https://oauth2.googleapis.com/token",
-		}
-
-		opts = append(opts, option.WithHTTPClient(conf.Client(ctx)))
-	} else {
-		opts = append(opts, option.WithScopes(storage.ScopeReadWrite))
+		log.Printf("[INFO] Authenticating using configured Google JSON 'credentials'...")
 	}
 
-	// Service Account Impersonation
-	if v, ok := data.GetOk("impersonate_service_account"); ok {
-		ServiceAccount := v.(string)
-		opts = append(opts, option.ImpersonateCredentials(ServiceAccount))
+	if ImpersonateServiceAccount != "" {
+		opts = append(opts, option.ImpersonateCredentials(ImpersonateServiceAccount, ImpersonateServiceAccountDelegates...))
+	}
 
-		if v, ok := data.GetOk("impersonate_service_account_delegates"); ok {
-			var delegates []string
-			d := v.([]interface{})
-			if len(delegates) > 0 {
-				delegates = make([]string, len(d))
-			}
-			for _, delegate := range d {
-				delegates = append(delegates, delegate.(string))
-			}
-			opts = append(opts, option.ImpersonateCredentials(ServiceAccount, delegates...))
+	log.Printf("[INFO] Authenticating using DefaultClient...")
+
+	if v, ok := data.GetOk("access_token"); ok {
+		contents, err := backend.ReadPathOrContents(v.(string))
+		if err != nil {
+			return fmt.Errorf("Error loading access token: %s", err)
 		}
+		token := &oauth2.Token{AccessToken: contents}
+		opts = []option.ClientOption{option.WithTokenSource(oauth2.StaticTokenSource(token))}
+
+		if ImpersonateServiceAccount != "" {
+			opts = []option.ClientOption{option.WithTokenSource(oauth2.StaticTokenSource(token)), option.ImpersonateCredentials(ImpersonateServiceAccount, ImpersonateServiceAccountDelegates...)}
+		}
+
+		log.Printf("[INFO] Authenticating using configured Google 'access_token'...")
 	}
 
 	opts = append(opts, option.WithUserAgent(httpclient.UserAgentString()))
@@ -225,12 +228,4 @@ func (b *Backend) configure(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// accountFile represents the structure of the account file JSON file.
-type accountFile struct {
-	PrivateKeyId string `json:"private_key_id"`
-	PrivateKey   string `json:"private_key"`
-	ClientEmail  string `json:"client_email"`
-	ClientId     string `json:"client_id"`
 }
